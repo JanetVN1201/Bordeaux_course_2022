@@ -146,12 +146,16 @@ melanoma$status[melanoma$status==2] = 0
 melanoma$status[melanoma$status==3] = 0
 prop_died = sum(melanoma$status[melanoma$status==1])/nrow(melanoma)
 
+ggplot(melanoma, aes(x = status)) + geom_bar() +
+  labs(x = "I(died)", y = "Frequency")
 ```  
 
 We see that `r prop_died*100` $\%$ died from malignant melanoma during the study period. The covariates we consider are *age, sex, year*(year of surgery), *thickness, ulcer*(if the removed tumor were ulcerated, believed to be an important prognostic factor). For interpretibility, we scale the continuous covariates to have a zero mean and unit variance, and we scale *year* to be the number of years since the first surgery,.
 ```{r Example 1.c}
 #Scale the continuous covariates for the fixed effects
-
+melanoma$age = scale(melanoma$age)
+melanoma$thickness = scale(melanoma$thickness)
+melanoma$year = melanoma$year - min(melanoma$year)
 ```
 Now we are ready to fit the logistic regression model 
 \begin{equation}
@@ -163,19 +167,41 @@ where
 \end{equation} 
 ```{r Example 1.d}
 #INLA model
-
+model3.1 <- inla(status ~ age + sex + year + thickness + ulcer,
+                 family = "binomial",
+                 data = melanoma)
 ```
 We can view a summary of the results from the model, available in the INLA object *model3.1*. 
 ```{r Example 1.e}
-
+summary(model3.1)
 ```
 We see form the $95/%$ credible intervals that only *age* and *ulcer* are statistically significant covariates in explaining the variation in the *status* variable. Since $\beta_{Year}\in$ (`r model3.1$summary.fixed$'0.025quant'[4]`; `r model3.1$summary.fixed$'0.975quant'[4]`), we can infer that earlier years of surgery increases the odds of dying from malignant melanoma, compared to later years. Also, an ulcerated tumor increases the odds of dying from malignant melanoma, since $\beta_{Ulcer=1}\in$ (`r model3.1$summary.fixed$'0.025quant'[6]`; `r model3.1$summary.fixed$'0.975quant'[6]`).  
 
 We can also extract the posterior distributions of the fixed effects from the INLA object *model3.1*
 ```{r Example 1.f}
 #posterior marginals of the model components
+pAge <- ggplot(data.frame(model3.1$marginals.fixed$age), aes(x=x, y=y)) + geom_line() + 
+  labs(x = expression(beta["Age"]), y = "Density") + 
+  geom_vline(xintercept = 0, col = "blue")
 
+pSex <- ggplot(data.frame(model3.1$marginals.fixed$sex), aes(x=x, y=y)) + geom_line() + 
+  labs(x = expression(beta["Sex = 1"]), y = "Density") + 
+  geom_vline(xintercept = 0, col = "blue")
 
+pYear <- ggplot(data.frame(model3.1$marginals.fixed$year), aes(x=x, y=y)) + geom_line() + 
+  labs(x = expression(beta["Year"]), y = "Density") + 
+  geom_vline(xintercept = 0, col = "blue")
+
+pThickness <- ggplot(data.frame(model3.1$marginals.fixed$thickness), aes(x=x, y=y)) + geom_line() + 
+  labs(x = expression(beta["Thickness"]), y = "Density") + 
+  geom_vline(xintercept = 0, col = "blue")
+
+pUlcer <- ggplot(data.frame(model3.1$marginals.fixed$ulcer), aes(x=x, y=y)) + geom_line() + 
+  labs(x = expression(beta["Ulcer = 1"]), y = "Density") + 
+  geom_vline(xintercept = 0, col = "blue")
+
+ggarrange(pAge, pSex, pYear, pThickness, pUlcer,
+          nrow = 2, ncol = 3)
 
 
 ```
@@ -192,39 +218,53 @@ We see that the number of deaths is a count variable and therefore propose a Poi
 $$y\sim Poi(E\theta)$$
 with $$\theta = \exp(\eta)$$ and $E$ is the expected count. In this way, $\theta$ indicates the risk. We need to calculate the expected count for each observation,
 ```{r Example 2.b}
-
+p_hat <- sum(nc.sids$SID74) / sum(nc.sids$BIR74)
+nc.sids$E74 <- p_hat * nc.sids$BIR74
 ```
 We use the NWBIR as a covariate to investigate if it has any influence on the risk of SIDS. We consider the proportion instead of the count,
 ```{r Example 2.c}
+nc.sids$nwp_hat74 <- nc.sids$NWBIR74 / nc.sids$BIR74
 ```
 Now we can fit the Poisson regression model, 
 ```{r Example 2.d}
-
+result1_sids <- inla(SID74 ~ nwp_hat74, data = nc.sids, 
+                     family = "poisson",
+                     control.predictor = list(compute = TRUE),
+                     E = E74)
 ```
 The posterior summaries of this model is
 ```{r Example 2.e}
-
+summary(result1_sids)
 ```
 We can also visually investigate how the fitted values from the model fits onto the observed data,
 ```{r Example 2.f}
-
+plot(nc.sids$SID74)
+points(nc.sids$E74*result1_sids$summary.fitted.values[,1], col = "blue", pch = 10)
 ```
 When we look at the data we see that the observations are form different counties and from a public health viewpoint this can provide interesting insight. We add a random intercept for each county to the Poisson regression model, so that we know have a mixed effects model.
 ```{r Example 2.g}
-
+result2_sids <- inla(SID74 ~ nwp_hat74 + f(CNTY.ID, model = "iid"), 
+                     data = nc.sids, 
+                     family = "poisson",
+                     control.predictor = list(compute = TRUE),
+                     E = E74)
+summary(result2_sids)
 ```
 The extra hyperparameter, the standard deviation of the random intercept has the following posterior,
 ```{r Example 2.h}
-
+res2_sd_rint <- inla.tmarginal(function(x) sqrt(1/x), result2_sids$marginals.hyperpar$`Precision for CNTY.ID`)
+plot(res2_sd_rint, type = "l", xlab = expression(sigma), ylab = expression(paste("f(", sigma ,"|y)")))
 ```
 We can also visually investigate how the fitted values from the model fits onto the observed data,
 ```{r Example 2.i}
-
+plot(nc.sids$SID74)
+points(nc.sids$E74*result1_sids$summary.fitted.values[,1], col = "blue", pch = 10)
+points(nc.sids$E74*result2_sids$summary.fitted.values[,1], col = "red", pch = 19, cex = 0.5)
 ```
 Adding a random intercept adds an independent effect, although the counties are probably not independent in terms of socio-economic diversity. So we should rather include a structured random effect such that some "intercepts" are correlated with each other, conveying the dependence in space. Since we have space divided into discrete non-overlapping parts, we can use a Besag or BYM model.
 ```{r Example 2.j, eval = F}
-#inla.doc("besag")
-#inla.doc("bym")
+inla.doc("besag")
+inla.doc("bym")
 ```
 Now we add a BYM effect for the different counties,
 ```{r Example 2.k}
@@ -245,19 +285,32 @@ nc.sidsOGR$nwp_hat74 <- nc.sidsOGR$NWBIR74 / nc.sidsOGR$BIR74
 nc.sidsOGR$CNTY_ID2 <- 1:(length(nc.sidsOGR$CNTY_ID))
 
 #Fit the spatial model
-
+result3_sids <- inla(SID74 ~ nwp_hat74 + f(CNTY_ID2, model = "bym2", graph = B.boston, scale.model = TRUE), 
+                     data = as.data.frame(nc.sidsOGR), 
+                     family = "poisson",
+                     control.predictor = list(compute = TRUE),
+                     E = E74)
 ```
 The posterior summary is
 ```{r Example 2.l}
-
+summary(result3_sids)
 ```
 The two extra hyperparameters from the BYM effect are the marginal standard deviation, $\sigma$ and the weight parameter, $\phi$, and their marginal posteriors are
 ```{r Example 2.m}
-
+res3_sd_bym <- inla.tmarginal(function(x) sqrt(1/x), result3_sids$marginals.hyperpar$`Precision for CNTY_ID2`)
+plot(res3_sd_bym, type = "l", xlab = expression(sigma), ylab = expression(paste("f(", sigma ,"|y)")))
+plot(result3_sids$marginals.hyperpar$`Phi for CNTY_ID2`, type = "l", xlab = expression(phi), ylab = expression(paste("f(", phi ,"|y)")))
 ```
 We can again visually see the fit of the predictions from the model to the data,
 ```{r Example 2.n}
+nc.sidsOGR$fit_bym <- result3_sids$summary.fitted.values$mean*nc.sidsOGR$E74
+spplot(nc.sidsOGR, c("SID74", "fit_bym"), col.regions = brewer.pal(n=9, name = "GnBu"),
+       at = seq(0, 50, 9))
 
+plot(nc.sids$SID74)
+points(nc.sids$E74*result1_sids$summary.fitted.values[,1], col = "blue", pch = 10)
+points(nc.sids$E74*result2_sids$summary.fitted.values[,1], col = "red", pch = 19, cex = 0.5)
+points(nc.sids$E74*result3_sids$summary.fitted.values[,1], col = "purple", pch = 8, cex = 0.8)
 ```
 When we compare the fit between models we can look at the marginal log-likelihoods, DIC or WAIC.
 ```{r Example 2.o}
@@ -307,24 +360,89 @@ airp.data$l_airp <- log(airp.data$airp)
 Since the response evolve sover time and is clearly associated with time, we will fit various te,poral models for illustration. Obviously, the seasonal model is the best choice.
 ```{r Example 3.b}
 #inla.doc("ar1")
-
+airp.ar1 <- inla(l_airp ~ -1 + year + f(ID, model = "ar1"),
+                 control.family = list(hyper = list(prec = list(param = c(1, 0.2)))),
+                 data = airp.data, control.predictor = list(compute = TRUE))
+summary(airp.ar1)
+plot(log(airp.data$airp), type = "l", xlab = "Year", ylab = "Log of the count of passengers
+     ")
+lines(airp.ar1$summary.fitted.values$mean, col = "blue")
 ```
 
 ```{r Example 3.c}
 #inla.doc("ar1c")
-
+Z_ar1c <- model.matrix(~ 0 + year, data = airp.data)
+Q.beta.prior <- Diagonal(12, 0.001)
+airp.ar1c <- inla(l_airp ~ -1 + f(ID, model = "ar1c",
+                                  args.ar1c = list(Z = Z_ar1c, Q.beta = Q.beta.prior)),
+                 control.family = list(hyper = list(prec = list(param = c(1, 0.2)))),
+                 data = airp.data, control.predictor = list(compute = TRUE))
+summary(airp.ar1c)
+plot(log(airp.data$airp), type = "l", xlab = "Year", ylab = "Log of the count of passengers
+     ")
+lines(airp.ar1c$summary.fitted.values$mean, col = "green")
 ```
 ```{r Example 3.d}
 #inla.doc("seasonal")
-
+airp.seasonal <- inla(l_airp ~ -1 + year + f(ID, model = "seasonal",
+                                             season.length = 12),
+                 control.family = list(hyper = list(prec = list(param = c(1, 0.2)))),
+                 data = airp.data, control.predictor = list(compute = TRUE))
+summary(airp.seasonal)
+plot(log(airp.data$airp), type = "l", xlab = "Year", ylab = "Log of the count of passengers
+     ")
+lines(airp.seasonal$summary.fitted.values$mean, col = "red")
 ```
 
 ```{r Example 3.e}
 #inla.doc("rw")
+airp.rw1 <- inla(l_airp ~ -1 + year + f(ID, model = "rw1", 
+                                        scale.model = TRUE),
+                 control.family = list(hyper = list(prec = list(param = c(1, 0.2)))),
+                 data = airp.data, control.predictor = list(compute = TRUE))
+summary(airp.rw1)
 
+airp.rw2 <- inla(l_airp ~ -1 + year + f(ID, model = "rw2", 
+                                        scale.model = TRUE),
+                 control.family = list(hyper = list(prec = list(param = c(1, 0.2)))),
+                 data = airp.data, control.predictor = list(compute = TRUE))
+summary(airp.rw2)
+plot(log(airp.data$airp), type = "l", xlab = "Year", ylab = "Log of the count of passengers
+     ")
+lines(airp.rw1$summary.fitted.values$mean, col = "purple")
+lines(airp.rw2$summary.fitted.values$mean, col = "orange")
 ```
 Now let us consider the fit of all the models.
 ```{r Example 3.f}
-
+plot(log(airp.data$airp), type = "l", xlab = "Year", ylab = "Log of the count of passengers
+     ")
+lines(airp.ar1$summary.fitted.values$mean, col = "blue")
+lines(airp.ar1c$summary.fitted.values$mean, col = "green")
+lines(airp.seasonal$summary.fitted.values$mean, col = "red")
+lines(airp.rw1$summary.fitted.values$mean, col = "purple")
+lines(airp.rw2$summary.fitted.values$mean, col = "orange")
 ```
   
+## Example 4 - Multilevel  models
+The average reaction time per day (in milliseconds) for subjects in a sleep deprivation study.
+Days 0-1 were adaptation and training (T1/T2), day 2 was baseline (B); sleep deprivation started after day 2.
+
+```{r Example 3}
+data(sleepstudy)
+
+#Scale Reaction
+sleepstudy$Reaction <- sleepstudy$Reaction / 1000
+
+summary(sleepstudy)
+
+inla.sleep <- inla(Reaction ~ 1 + Days + f(Subject, model = "iid"),
+  data = sleepstudy)
+
+inla.sleep.w <- inla(Reaction ~ 1 + f(Subject, Days, model = "iid"),
+  data = sleepstudy, control.predictor = list(compute = TRUE))
+
+summary(inla.sleep.w)
+
+
+```
+
