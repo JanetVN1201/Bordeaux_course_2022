@@ -1,7 +1,7 @@
 ---
 title: "R-INLA Workshop May 2022"
 author: "Janet van Niekerk"
-date: "5/24/2022"
+date: "5/25/2022"
 output: html_document
 ---
 
@@ -55,13 +55,20 @@ levels(veteran$prior) <- c("No", "Yes")
 
 veteran$time.m <- round(veteran$time / 30, 3)
 
-#NP estimate of the survival function
+surv.vet <- Surv(veteran$time.m, veteran$status)
+km.vet <- survfit(surv.vet ~ 1)
+km.vet.cell <- survfit(surv.vet ~ -1 + celltype, data = veteran)
+autoplot(km.vet.cell) + labs(x = "Survival time", y = "Survival curve")
 
 #inla.doc("surv")
+inla.surv.vet <- inla.surv(time = veteran$time.m, event = veteran$status)
+inla.model.vet <- inla(formula = inla.surv.vet ~ -1 + celltype,
+                       data = veteran,
+                       family = "weibullsurv", 
+                       control.family = list(variant = 1),
+                       control.compute=list(config = TRUE))
+summary(inla.model.vet)
 
-
-
-#S(t) from INLA model
 set.seed(1234)
 nn = 1000
 sample1 = inla.posterior.sample(inla.model.vet, n = nn, selection = list(celltypesquamous = 1,
@@ -104,7 +111,7 @@ s4.mean = rowMeans(s4)
 data1 = data.frame(x = rep(tseq, 4), y = c(s1.mean, s2.mean, s3.mean, s4.mean), cell = rep(c("squamous", "smallcell", "adeno", "large"), each = length(tseq)))
 
 autoplot(km.vet.cell) + labs(x = "Survival time", y = "Survival curve")
-ggplot(data1, aes(x = x, y = y, group = cell, , colour = factor(cell))) + geom_line()
+ggplot(data1, aes(x = x, y = y, group = cell, colour = factor(cell))) + geom_line()
 #lines(tseq, s2.mean, lty = 2)
 #lines(tseq, s3.mean, lty = 3)
 #lines(tseq, s4.mean, lty = 4)
@@ -116,24 +123,30 @@ ggplot(data1, aes(x = x, y = y, group = cell, , colour = factor(cell))) + geom_l
 Patients with Diabetes Mellitus type 1 or type 2 can experience a common complication termed Diabetic Nephropathy which is kidney damage resulting from uncontrolled high blood glucose levels. Diabetic Nephropathy can lead to chronic kidney disease and even result in kidney failure. The data we consider here are for $731$ patients diagnosed with Diabetes Mellitus type 1 and the time from Diabetes onset to time of Diabetic Nephropathy onset is monitored, and interval censored in some patients. In this study the aim is to investigate if there is a significant difference in the risk of Diabetic Nephropathy between the two genders, male and female. 
 ```{r Example 2}
 library(icenReg)
+library(INLA)
 data(IR_diabetes)
-
-#PO model with ic_par
-
+fit <- ic_par(cbind(left, right) ~ gender, 
+              data = IR_diabetes,
+              model = "po",
+              dist = "loglogistic")
 IR_diabetes$event = rep(3, nrow(IR_diabetes))
 for (i in 1:nrow(IR_diabetes)){
 if (IR_diabetes$right[i]==IR_diabetes$left[i]){
   IR_diabetes$event[i] = 1
 }
 }
-
 IR_diabetes$ID = 1:nrow(IR_diabetes)
 
-#PO model with INLA
+res1 = inla(inla.surv(time = IR_diabetes$left, time2 = IR_diabetes$right,
+                  event = IR_diabetes$event) ~ as.factor(gender) + f(ID, model = "iid"),
+            data = IR_diabetes,
+            family = "loglogistic.surv",
+            verbose = FALSE,
+            control.compute = list(config = TRUE),
+            control.family = list(variant = 1))
+inla.rerun(res1)
+summary(res1)
 
-
-
-#Results
 sigma_mar = inla.tmarginal(function(x) sqrt(1/x), res1$marginals.hyperpar$`Precision for ID`)
 plot(sigma_mar, type = "l", lwd = 2,main = "",
      ylab = expression(paste(pi,"(", sigma, "|y)")), xlab = expression(sigma))
@@ -234,9 +247,25 @@ eta21 = b02 + b12*x + u
 time21 = cbind(rexp(n,exp(eta21)), rexp(n,exp(eta21)))
 
 #Surv list for joint frailty model
+time_12 = c(time12[,1], time12[,2], rep(NA, 2*n))
+time_21 = c(rep(NA, 2*n), time21[,1], time21[,2])
+event_12 = c(rep(1, 2*n), rep(NA, 2*n))
+event_21 = c(rep(NA, 2*n), rep(1, 2*n))
+surv_all12 = list(time = time_12, event = event_12)
+surv_all21 = list(time = time_21, event = event_21)
 
-#CR joint frailty model
-
+#Joint frailty model
+surv_all = list(surv_all12, surv_all21)
+x2_12 = c(rep(x, 2),rep(0, 2*n))
+x2_21 = c(rep(0, 2*n),rep(x, 2))
+Inte = as.factor(c(rep(1,2*n), rep(2, 2*n)))
+res_all = inla(surv_all ~ -1 + Inte + x2_12 + x2_21 + f(ID2, model = "iid"),
+               data = data.frame(x2_12 = x2_12,
+                                 x2_21 = x2_21,
+                                 Inte = Inte,
+                                 ID2 = rep(ID, 4)),
+               family = c("exponentialsurv","exponentialsurv"),
+               control.predictor = list(compute = TRUE))
 
 #summary(res_all)
 #Check results
@@ -268,14 +297,15 @@ print(cbind(rbind(cbind("True P", " "), P_t),
 ## Example 4 - SANAD trial analysis
 The SANAD (Standard and New Anti-epileptic Drugs) study (Marson et al., 2007) is a randomized control trial of standard and new anti-epileptic drugs, comparing effects on longer term clinical outcomes. The data consists of longitudinal measurements of calibrated dose for the groups randomized to a standard drug (CBZ) and a new drug (LTG). The objective of the analysis is to investigate the effect of drug titration on the relative effects of LTG and CBZ on treatment failure (withdrawal of the randomized drug). There are several baseline covariates available, and also data on the time to withdrawal from randomized drug.
 ```{r Example 4}
-library(joineR)
-#Scale time
-
 mTime=max(max(epileptic$time),max(epileptic$with.time))
 epileptic$time<-epileptic$time/mTime
 epileptic$with.time <-epileptic$with.time/mTime
 
-#Create data for survival components
+epileptic$interaction <- with(epileptic, time * (treat == "LTG"))
+epileptic$interaction2 <- with(epileptic, time * (treat == "CBZ"))
+epileptic$interaction[epileptic$interaction==0]<-NA
+epileptic$interaction2[epileptic$interaction2==0]<-NA
+
 data1<-epileptic
 dataS<-data.frame(ID=data1$id,Time=as.numeric(data1$with.time),Status=data1$with.status2,StatusISC=data1$with.status.isc,StatusUAE=data1$with.status.uae,Age=data1$age,Gender=data1$gender,LD=data1$learn.dis,Treatment=data1$treat, dose = data1$dose)
 dataS<-subset(dataS,!duplicated(dataS$ID))
@@ -285,22 +315,46 @@ summary(dataS)
 
 #CR model
 nS<-nrow(dataS)
-fixed.eff<-data.frame()
+fixed.eff<-data.frame(mu=as.factor(c(rep(1,nS),rep(2,nS))),
+                      ageUAE=c(dataS$Age,rep(0,nS)),
+                      ageISC=c(rep(0,nS),dataS$Age),
+                 treatmentUAE=as.factor(c(dataS$Treatment,rep(NA,nS))),
+                    treatmentISC=as.factor(c(rep(NA,nS),dataS$Treatment)),
+                      genderUAE=as.factor(c(dataS$Gender ,rep(NA,nS))),
+                    genderISC=as.factor(c(rep(NA,nS),dataS$Gender)),
+                doseUAE=c(dataS$dose ,rep(NA,nS)),
+                    doseISC=c(rep(NA,nS),dataS$dose))
 
-random.eff<-list()
+random.eff<-list(betaUAE=c(dataS$ID,rep(NA,nS)),
+                 betaISC=c(rep(NA,nS),dataS$ID),
+                 frailtyUAE=c(dataS$ID,rep(NA,nS)),
+                 frailtyISC=c(rep(NA,nS),dataS$ID))
                       
 
 CR_data<-c(fixed.eff,random.eff)
-
+y.survUAE <- inla.surv(time = c(dataS$Time,rep(NA,nS)), 
+                       event = c(dataS$StatusUAE,rep(NA,nS)))
+y.survISC <- inla.surv(time = c(rep(NA,nS),dataS$Time), 
+                       event = c(rep(NA,nS),dataS$StatusISC))
+y.joint<-list(y.survUAE,y.survISC)
 
 CR_data$Y=y.joint
 
-#Model fit in INLA
-
+#Model fit
+formula.model=Y ~ -1 + mu + treatmentUAE + treatmentISC + genderUAE + genderISC + doseUAE + doseISC + 
+  f(betaUAE, model = "iid")+
+  f(betaISC, copy="betaUAE", hyper = list(beta = list(fixed = FALSE)))
     
 
+CR_model= inla(formula.model, family = c("weibullsurv","weibullsurv"),
+                      data = CR_data, verbose=FALSE, control.compute=list(dic=TRUE),
+                      control.family = list(
+                        list(variant = 1),
+                        list(variant = 1)
+                        ),
+                 inla.mode = "experimental"
+                 )
 
-#Results
 summary(CR_model)
 plot(CR_model)
 
