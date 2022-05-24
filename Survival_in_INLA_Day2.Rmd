@@ -1,0 +1,308 @@
+---
+title: "R-INLA Workshop May 2022"
+author: "Janet van Niekerk"
+date: "5/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("INLA")
+library("spdep")
+library("RColorBrewer")
+library("spatstat")
+library("rgdal")
+library("sp")
+library("maptools")
+library("latticeExtra")
+library("gridExtra")
+library("gstat")
+library("raster")
+library("ggplot2")
+library("ggfortify")
+library("survival")
+library("joineR")
+library("bayesSurv")
+library("icenReg")
+library("nloptr")
+library("faraway")
+library("lme4")
+
+inla.setOption(inla.mode = "experimental")
+
+#Which likelihoods?
+names(inla.models()$likelihood)
+#What are the default priors?
+inla.set.control.fixed.default()
+#Details of the models
+#inla.doc()
+
+
+```
+
+## Example 1 - Survival analysis using the veteran lung cancer dataset
+
+The veteran dataset contains data from the Veteran’s Administration Lung Cancer Trial. This dataset records time to death of 137 male patients with advanced inoperable lung cancer. Patients were assigned at random a standard treatment or a test treatment. Only 9 patients left the trial before they experienced death. In addition to the time to death and the treatment received, there are other covariates measured.
+
+```{r veteran}
+library("survival")
+summary(veteran)
+
+veteran$trt <- as.factor(veteran$trt)
+levels(veteran$trt) <- c("standard", "test")
+veteran$prior <- as.factor(veteran$prior)
+levels(veteran$prior) <- c("No", "Yes")
+
+veteran$time.m <- round(veteran$time / 30, 3)
+
+#NP estimate of the survival function
+
+#inla.doc("surv")
+
+
+
+#S(t) from INLA model
+set.seed(1234)
+nn = 1000
+sample1 = inla.posterior.sample(inla.model.vet, n = nn, selection = list(celltypesquamous = 1,
+                      celltypesmallcell = 1,
+                      celltypeadeno = 1,
+                      celltypelarge = 1
+                      ))
+
+samples = matrix(NA, nrow = 5, ncol = nn)
+for (i in 1 : nn){
+  samples[,i] = c(sample1[[i]]$latent, sample1[[i]]$hyperpar)
+}
+
+tseq <- seq(0.01, max(veteran$time.m), by = 0.1)
+s1 <- matrix(NA, nrow = length(tseq), ncol = nn)
+for (i in 1 : nn){
+  s1[,i] = exp(-(tseq*exp(samples[1,i]))^samples[5,i])
+}
+s1.mean = rowMeans(s1)
+
+
+s2 <- matrix(NA, nrow = length(tseq), ncol = nn)
+for (i in 1 : nn){
+  s2[,i] = exp(-(tseq*exp(samples[2,i]))^samples[5,i])
+}
+s2.mean = rowMeans(s2)
+
+s3 <- matrix(NA, nrow = length(tseq), ncol = nn)
+for (i in 1 : nn){
+  s3[,i] = exp(-(tseq*exp(samples[3,i]))^samples[5,i])
+}
+s3.mean = rowMeans(s3)
+
+s4 <- matrix(NA, nrow = length(tseq), ncol = nn)
+for (i in 1 : nn){
+  s4[,i] = exp(-(tseq*exp(samples[4,i]))^samples[5,i])
+}
+s4.mean = rowMeans(s4)
+
+data1 = data.frame(x = rep(tseq, 4), y = c(s1.mean, s2.mean, s3.mean, s4.mean), cell = rep(c("squamous", "smallcell", "adeno", "large"), each = length(tseq)))
+
+autoplot(km.vet.cell) + labs(x = "Survival time", y = "Survival curve")
+ggplot(data1, aes(x = x, y = y, group = cell, , colour = factor(cell))) + geom_line()
+#lines(tseq, s2.mean, lty = 2)
+#lines(tseq, s3.mean, lty = 3)
+#lines(tseq, s4.mean, lty = 4)
+
+
+```
+
+## Example 2 - Interval censored PO model
+Patients with Diabetes Mellitus type 1 or type 2 can experience a common complication termed Diabetic Nephropathy which is kidney damage resulting from uncontrolled high blood glucose levels. Diabetic Nephropathy can lead to chronic kidney disease and even result in kidney failure. The data we consider here are for $731$ patients diagnosed with Diabetes Mellitus type 1 and the time from Diabetes onset to time of Diabetic Nephropathy onset is monitored, and interval censored in some patients. In this study the aim is to investigate if there is a significant difference in the risk of Diabetic Nephropathy between the two genders, male and female. 
+```{r Example 2}
+library(icenReg)
+data(IR_diabetes)
+
+#PO model with ic_par
+
+IR_diabetes$event = rep(3, nrow(IR_diabetes))
+for (i in 1:nrow(IR_diabetes)){
+if (IR_diabetes$right[i]==IR_diabetes$left[i]){
+  IR_diabetes$event[i] = 1
+}
+}
+
+IR_diabetes$ID = 1:nrow(IR_diabetes)
+
+#PO model with INLA
+
+
+
+#Results
+sigma_mar = inla.tmarginal(function(x) sqrt(1/x), res1$marginals.hyperpar$`Precision for ID`)
+plot(sigma_mar, type = "l", lwd = 2,main = "",
+     ylab = expression(paste(pi,"(", sigma, "|y)")), xlab = expression(sigma))
+sigma_sum = inla.zmarginal(sigma_mar)
+
+par(mar = c(4,4,1,1))
+plot(res1$marginals.fixed$`(Intercept)`, type = "l", lwd = 2,main = "",
+     ylab = expression(paste(pi,"(", beta[0], "|y)")), xlab = expression(beta[0]))
+
+plot(res1$marginals.fixed$`as.factor(gender)male`, type = "l", lwd = 2,main = "",
+     ylab = expression(paste(pi,"(", beta[1], "|y)")), xlab = expression(beta[1]))
+
+plot(sigma_mar, type = "l", lwd = 2,main = "",
+     ylab = expression(paste(pi,"(", sigma, "|y)")), xlab = expression(sigma))
+
+plot(res1$marginals.hyperpar$`alpha for loglogistic observations`, type = "l", lwd = 2,main = "",
+     ylab = expression(paste(pi,"(", alpha, "|y)")), xlab = expression(alpha))
+
+#Posterior survival functions
+sample1 = inla.posterior.sample(res1, n = 100)
+IR_diabetes = cbind(IR_diabetes, matrix(rep(NA,73100), byrow = TRUE, nrow = 731))
+hyper_dia = rep(NA,100)
+betas = matrix(rep(NA, 200), ncol = 2)
+for (i in 1:100){
+IR_diabetes[,i+3] = sample1[[i]]$latent[1:731]
+hyper_dia[i] = sample1[[i]]$hyperpar[1]
+betas[i,1] = sample1[[i]]$latent[1463]
+betas[i,2] = sample1[[i]]$latent[1464]
+}
+
+
+tseq = seq(0,50, length = 200)
+st_male = matrix(rep(NA, 200*100), ncol = 100)
+st_female = st_male
+
+for (i in 1:100){
+  st_male[,i] = 1/(1+(exp(betas[i,1] + betas[i,2])*tseq)^hyper_dia[i])
+  st_female[,i] = 1/(1+(exp(betas[i,1])*tseq)^hyper_dia[i])
+}
+
+st_m = matrix(rep(NA, 3*200), ncol = 3)
+st_f = matrix(rep(NA, 3*200), ncol = 3)
+
+for (i in 1:200){
+st_m[i,1] = quantile(st_male[i,], 0.025)
+st_m[i,2] = quantile(st_male[i,], 0.5)
+st_m[i,3] = quantile(st_male[i,], 0.975)
+st_f[i,1] = quantile(st_female[i,], 0.025)
+st_f[i,2] = quantile(st_female[i,], 0.5)
+st_f[i,3] = quantile(st_female[i,], 0.975)
+}
+
+par(mar = c(5,5,1,1))
+npmleFit <- ic_np(cbind(left, right) ~ gender, data = IR_diabetes)
+plot(npmleFit, main = "", col = c("red", "blue"), lty = c(1,2))
+
+lines(tseq, st_m[,1], col = "blue", lty = 3)
+lines(tseq, st_m[,2], col = "blue", lty = 2, lwd = 2)
+lines(tseq, st_m[,3], col = "blue", lty = 3)
+lines(tseq, st_f[,1], col = "red", lty = 3)
+lines(tseq, st_f[,2], col = "red", lty = 1, lwd = 2)
+lines(tseq, st_f[,3], col = "red", lty = 3)
+
+
+#median st
+tseq[which.min(abs(st_m[,2]-0.5))]
+tseq[which.min(abs(st_f[,2]-0.5))]
+```
+  
+## Example 3 - Competing risks/Multistate models
+We simulate data for a two-state model where multiple transitions between the states are possible - there is no absorbing state.
+```{r Example 3}
+#Simulation for multiple transitions between states 1 and 2
+n = 2000
+b01 = 1
+b11 = 1
+b02 = 0.5
+b12 = 0.5
+u = rnorm(n,sd = 0.2)
+x = rnorm(n)
+ID = 1:n
+
+#True mean transition probability matrix
+haz_t<-c(exp(b01), exp(b02))
+Q11<-0-sum(haz_t[1])
+Q22<-0-sum(haz_t[2])
+Q_t<-matrix(c(Q11,haz_t[1],haz_t[2],Q22),nrow=2,ncol=2,byrow=TRUE)
+P_t<-matrix(expm(1*Q_t),nrow=2,ncol=2) #Transition prob matrix
+check=sum(P_t[1,])
+P_t
+
+#Two transitions from 1 to 2
+eta12 = b01 + b11*x + u
+time12 = cbind(rexp(n,exp(eta12)),rexp(n,exp(eta12)))
+
+#Two transition from 2 to 1
+eta21 = b02 + b12*x + u
+time21 = cbind(rexp(n,exp(eta21)), rexp(n,exp(eta21)))
+
+#Surv list for joint frailty model
+
+#CR joint frailty model
+
+
+#summary(res_all)
+#Check results
+print(cbind(rbind("True value",
+                  b01,
+                  b11,
+                  b02,
+                  b12,
+                  "Frailty_prec" = (1/0.2^2)), 
+            rbind("Estimated value",res_all$summary.fixed$mean[1], 
+                  res_all$summary.fixed$mean[3], 
+                  res_all$summary.fixed$mean[2],
+                  res_all$summary.fixed$mean[4],
+                  res_all$summary.hyperpar$mean)),
+      quote = FALSE)
+
+#Empirical transition probability matrix
+haz<-c(exp(res_all$summary.fixed$mean[1]), exp(res_all$summary.fixed$mean[2]))
+Q11<-0-sum(haz[1])
+Q22<-0-sum(haz[2])
+Q<-matrix(c(Q11,haz[1],haz[2],Q22),nrow=2,ncol=2,byrow=TRUE)
+P<-matrix(expm(1*Q),nrow=2,ncol=2) #Transition prob matrix
+check=sum(P[1,])
+print(cbind(rbind(cbind("True P", " "), P_t),
+            rbind(cbind("Empirical P", " "), P)),
+      quote = FALSE)
+```
+  
+## Example 4 - SANAD trial analysis
+The SANAD (Standard and New Anti-epileptic Drugs) study (Marson et al., 2007) is a randomized control trial of standard and new anti-epileptic drugs, comparing effects on longer term clinical outcomes. The data consists of longitudinal measurements of calibrated dose for the groups randomized to a standard drug (CBZ) and a new drug (LTG). The objective of the analysis is to investigate the effect of drug titration on the relative effects of LTG and CBZ on treatment failure (withdrawal of the randomized drug). There are several baseline covariates available, and also data on the time to withdrawal from randomized drug.
+```{r Example 4}
+library(joineR)
+#Scale time
+
+mTime=max(max(epileptic$time),max(epileptic$with.time))
+epileptic$time<-epileptic$time/mTime
+epileptic$with.time <-epileptic$with.time/mTime
+
+#Create data for survival components
+data1<-epileptic
+dataS<-data.frame(ID=data1$id,Time=as.numeric(data1$with.time),Status=data1$with.status2,StatusISC=data1$with.status.isc,StatusUAE=data1$with.status.uae,Age=data1$age,Gender=data1$gender,LD=data1$learn.dis,Treatment=data1$treat, dose = data1$dose)
+dataS<-subset(dataS,!duplicated(dataS$ID))
+
+summary(dataS)
+
+
+#CR model
+nS<-nrow(dataS)
+fixed.eff<-data.frame()
+
+random.eff<-list()
+                      
+
+CR_data<-c(fixed.eff,random.eff)
+
+
+CR_data$Y=y.joint
+
+#Model fit in INLA
+
+    
+
+
+#Results
+summary(CR_model)
+plot(CR_model)
+
+```
+
