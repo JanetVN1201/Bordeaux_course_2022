@@ -47,6 +47,96 @@ Y2 <- rpois(nmesy, exp(linPredY2))
 lon <- data.frame(Y1, Y2, id, time)
 summary(lon) # dataset
 
+inla.setOption(inla.mode="experimental")
+
+ids <- length(unique(lon$id))+lon$id
+
+formula <- Y1 ~ time + f(id, model="iid2d", n=length(unique(lon$id))*2)+
+                       f(ids, time, copy="id")
+M1 <- inla(formula, data=lon)
+summary(M1)
+
+
+formula <- Y1 ~ time + f(id, model="iidkd", order=2, n=length(unique(lon$id))*2)+
+  f(ids, time, copy="id")
+M1 <- inla(formula, data=lon)
+summary(M1)
+
+MC_samples <- inla.iidkd.sample(10^4, M1, "id", return.cov = T)
+VarCov <- matrix(unlist(MC_samples), nrow=2*2)
+VarCovMeans <- matrix(rowMeans(VarCov), 2, 2); round(VarCovMeans, 3)
+VarCovSD <- matrix(apply(VarCov, 1, sd), 2, 2);round(VarCovSD, 3)
+VarCov025 <- matrix(apply(VarCov, 1, function(x) quantile(x, 0.025)), 2, 2) ; round(VarCov025, 3)
+VarCov05 <- matrix(apply(VarCov, 1, function(x) quantile(x, 0.5)), 2, 2) ; round(VarCov05, 3)
+VarCov975 <- matrix(apply(VarCov, 1, function(x) quantile(x, 0.975)), 2, 2) ; round(VarCov975, 3)
+
+
+formula <- Y1 ~ time + f(id, model="iidkd", order=2, n=length(unique(lon$id))*2,
+                         hyper=list(theta1=list(param=c(10, 1, 1, 0))))+
+  f(ids, time, copy="id")
+M1 <- inla(formula, data=lon)
+summary(M1)
+
+x <- seq(-10, 10, by=0.1)
+plot(x, dnorm(x, 0, 1), type='l')
+abline(v=0.2, col='red')
+
+x <- seq(-100, 1000, by=0.1)
+plot(x, dnorm(x, 500, 1), type='l')
+abline(v=0.2, col='red')
+
+inla.priors.used(M1)
+
+M1 <- inla(formula, data=lon, 
+           control.fixed=list(mean.intercept=500, prec.intercept=1,
+                          mean=0, prec=1))
+summary(M1)
+
+
+
+N1 <- length(lon$Y1)
+N2 <- length(lon$Y2)
+NS <- length(unique(lon$id))
+
+data <- list(
+  IntY1 <- c(rep(1, N1), rep(NA, N2)),
+  IntY2 <- c(rep(NA, N1), rep(1, N2)),
+  TimeY1 <- c(lon$time, rep(NA, N2)),
+  TimeY2 <- c(rep(NA, N1), lon$time),
+  b1_i0Y1 <- c(lon$id, rep(NA, N2)),
+  b1_i0Y2 <- c(rep(NA, N1), NS+lon$id),
+  b1_i1Y1 <- c(NS+NS+lon$id, rep(NA, N2)),
+  b1_i1Y2 <- c(rep(NA, N1), NS+NS+NS+lon$id),
+  Yjoint <- list(Y1 = c(lon$Y1, rep(NA, N2)),
+                 Y2 = c(rep(NA, N1), lon$Y2))
+)
+
+formula <- Yjoint ~ -1 + IntY1 + IntY2 + TimeY1 + TimeY2 +
+  f(b1_i0Y1, model="iidkd", order=4, n=NS*4) +
+  f(b1_i0Y2, copy="b1_i0Y1") +
+  f(b1_i1Y1, TimeY1, copy="b1_i0Y1") +
+  f(b1_i1Y2, TimeY2, copy="b1_i0Y1")
+
+
+M2 <- inla(formula, data=as.data.frame(data), family=c("gaussian", "poisson"),
+           control.inla=list(int.strategy="eb"))
+summary(M2)
+
+MC_samples <- inla.iidkd.sample(10^4, M2, "b1_i0Y1", return.cov = T)
+VarCov <- matrix(unlist(MC_samples), nrow=4*4)
+VarCovMeans <- matrix(rowMeans(VarCov), 4, 4); round(VarCovMeans, 3)
+VarCovSD <- matrix(apply(VarCov, 1, sd), 4, 4);round(VarCovSD, 3)
+VarCov025 <- matrix(apply(VarCov, 1, function(x) quantile(x, 0.025)), 4, 4) ; round(VarCov025, 3)
+VarCov05 <- matrix(apply(VarCov, 1, function(x) quantile(x, 0.5)), 4, 4) ; round(VarCov05, 3)
+VarCov975 <- matrix(apply(VarCov, 1, function(x) quantile(x, 0.975)), 4, 4) ; round(VarCov975, 3)
+
+
+
+
+
+
+
+
 
 
 
